@@ -1,0 +1,242 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Enums
+enum Role {
+  ADMIN
+  OPERATOR
+}
+
+enum MovementType {
+  PURCHASE       // Compra / Ingreso
+  SALE           // Venta / Egreso
+  ADJUSTMENT     // Ajuste de stock
+  TRANSFER_OUT   // Transferencia salida
+  TRANSFER_IN    // Transferencia entrada
+}
+
+enum TransferStatus {
+  DRAFT
+  SENT
+  RECEIVED
+}
+
+enum CustomerType {
+  CLIENT
+  DISTRIBUTOR
+}
+
+enum InvoiceType {
+  A
+  B
+  C
+  X
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  VOID
+}
+
+// Models
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(OPERATOR)
+  branchId     String?
+  branch       Branch?  @relation(fields: [branchId], references: [id])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  movements    Movement[]
+  auditLogs    AuditLog[]
+}
+
+model Branch {
+  id        String   @id @default(cuid())
+  name      String
+  address   String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users   User[]
+  stocks  StockByBranch[]
+  sales   Invoice[]        @relation("BranchInvoices")
+  moves   Movement[]
+  asOrigin Transfers[]     @relation("TransferOrigin")
+  asDest   Transfers[]     @relation("TransferDest")
+}
+
+model Product {
+  id               String   @id @default(cuid())
+  code             String   @unique
+  barcode          String?  @unique
+  name             String
+  category         String?
+  unit             String?  // unidad de medida: unid, kg, lt, etc.
+  costBase         Decimal  // sin IVA
+  priceBase        Decimal  // sin IVA
+  vatRate          Decimal  // alícuota (21, 10.5, etc.)
+  stockMin         Decimal?
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  stocks           StockByBranch[]
+  movementItems    Movement[]
+  invoiceLines     InvoiceLine[]
+  transferItems    TransferItem[]
+}
+
+model StockByBranch {
+  id         String  @id @default(cuid())
+  productId  String
+  branchId   String
+  stock      Decimal @default(0)
+
+  product Product @relation(fields: [productId], references: [id])
+  branch  Branch  @relation(fields: [branchId], references: [id])
+
+  @@unique([productId, branchId])
+}
+
+model Supplier {
+  id          String   @id @default(cuid())
+  businessName String
+  cuit        String?  @unique
+  contact     String?
+  phone       String?
+  email       String?
+  address     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  purchases   Movement[]
+}
+
+model Customer {
+  id           String       @id @default(cuid())
+  businessName String
+  doc          String?      @unique // CUIT/DNI
+  type         CustomerType @default(CLIENT)
+  contact      String?
+  phone        String?
+  email        String?
+  address      String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  sales        Movement[]
+  invoices     Invoice[]
+}
+
+model Movement {
+  id                 String       @id @default(cuid())
+  type               MovementType
+  date               DateTime     @default(now())
+  branchId           String
+  productId          String
+  quantity           Decimal
+  costUnitBase       Decimal?     // para compras/ingresos
+  priceUnitBase      Decimal?     // para ventas/egresos
+  supplierId         String?
+  customerId         String?
+  userId             String
+  note               String?
+  balanceAfter       Decimal?     // saldo resultante por sucursal
+
+  branch   Branch   @relation(fields: [branchId], references: [id])
+  product  Product  @relation(fields: [productId], references: [id])
+  supplier Supplier? @relation(fields: [supplierId], references: [id])
+  customer Customer? @relation(fields: [customerId], references: [id])
+  user     User     @relation(fields: [userId], references: [id])
+
+  @@index([branchId, productId, date])
+}
+
+model Transfers {
+  id        String         @id @default(cuid())
+  originId  String
+  destId    String
+  date      DateTime       @default(now())
+  status    TransferStatus @default(DRAFT)
+  note      String?
+
+  origin Branch @relation("TransferOrigin", fields: [originId], references: [id])
+  dest   Branch @relation("TransferDest", fields: [destId], references: [id])
+  items  TransferItem[]
+}
+
+model TransferItem {
+  id          String    @id @default(cuid())
+  transferId  String
+  productId   String
+  quantity    Decimal
+
+  transfer Transfers @relation(fields: [transferId], references: [id])
+  product  Product   @relation(fields: [productId], references: [id])
+}
+
+model Invoice {
+  id              String        @id @default(cuid())
+  type            InvoiceType   @default(X)
+  pointOfSale     Int           @default(1)
+  number          Int           @default(0)
+  date            DateTime      @default(now())
+  customerId      String?
+  branchId        String
+  status          InvoiceStatus @default(DRAFT)
+  currency        String        @default("ARS")
+  subtotalBase    Decimal
+  tax             Decimal
+  total           Decimal
+
+  customer Customer? @relation(fields: [customerId], references: [id])
+  branch   Branch    @relation("BranchInvoices", fields: [branchId], references: [id])
+  lines    InvoiceLine[]
+
+  @@index([branchId, date])
+}
+
+model InvoiceLine {
+  id               String  @id @default(cuid())
+  invoiceId        String
+  productId        String
+  quantity         Decimal
+  priceUnitBase    Decimal
+  vatRate          Decimal
+  tax              Decimal
+  totalLine        Decimal
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  tableName  String
+  recordId   String
+  action     String
+  before     Json?
+  after      Json?
+  userId     String?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+  @@index([tableName, recordId])
+}
+
